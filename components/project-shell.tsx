@@ -4,7 +4,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/lib/db";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Download, RefreshCw } from "lucide-react";
+import { Download, RefreshCw, AlertTriangle } from "lucide-react";
 import { fmtDateTime } from "@/lib/utils";
 import { SummaryTab } from "@/components/tabs/summary-tab";
 import { TaskBudgetTab } from "@/components/tabs/task-budget-tab";
@@ -18,18 +18,27 @@ import { exportProjectToXlsx } from "@/lib/export";
 export function ProjectShell({ projectId }: { projectId: string }) {
   const [uploadOpen, setUploadOpen] = React.useState(false);
 
-  // Use `?? null` so useLiveQuery's undefined-while-loading is distinguishable from
-  // "record not found" (which would also come back as undefined without this).
+  // `?? null` distinguishes "still loading" (undefined) from "record not found" (null).
+  // The window guard prevents db() throwing during SSR.
   const project = useLiveQuery(
-    async () => (await db().projects.get(projectId)) ?? null,
+    async () => {
+      if (typeof window === "undefined") return null;
+      return (await db().projects.get(projectId)) ?? null;
+    },
     [projectId],
   );
   const allData = useLiveQuery(
-    async () => (await db().allDataExport.get(projectId)) ?? null,
+    async () => {
+      if (typeof window === "undefined") return null;
+      return (await db().allDataExport.get(projectId)) ?? null;
+    },
     [projectId],
   );
   const trans = useLiveQuery(
-    async () => (await db().projTransDetail.get(projectId)) ?? null,
+    async () => {
+      if (typeof window === "undefined") return null;
+      return (await db().projTransDetail.get(projectId)) ?? null;
+    },
     [projectId],
   );
 
@@ -50,6 +59,8 @@ export function ProjectShell({ projectId }: { projectId: string }) {
 
   const allDataRows = allData?.rows ?? [];
   const transRows = trans?.rows ?? [];
+  const missingAllData = !project.hasAllData;
+  const missingTrans = !project.hasTrans;
 
   const onExport = async () => {
     await exportProjectToXlsx(project, allDataRows, transRows);
@@ -77,6 +88,25 @@ export function ProjectShell({ projectId }: { projectId: string }) {
           </Button>
         </div>
       </header>
+
+      {(missingAllData || missingTrans) && (
+        <div className="flex items-center gap-2.5 px-6 py-2.5 bg-[rgba(176,112,32,0.07)] border-b border-[rgba(176,112,32,0.2)] text-[13px] text-warn">
+          <AlertTriangle size={14} className="shrink-0" />
+          <span>
+            {missingAllData && missingTrans
+              ? "No files uploaded yet. "
+              : missingAllData
+              ? "PM Web All-Data Export not uploaded — Summary and Task Budget tabs will be empty. "
+              : "K-Fasts Proj Trans Detail not uploaded — hours, revenue and transaction tabs will be empty. "}
+            <button
+              onClick={() => setUploadOpen(true)}
+              className="underline hover:no-underline"
+            >
+              Add files
+            </button>
+          </span>
+        </div>
+      )}
 
       <Tabs defaultValue="summary" className="flex-1 min-h-0 flex flex-col">
         <TabsList>

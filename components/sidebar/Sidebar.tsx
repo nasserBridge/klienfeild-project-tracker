@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -21,6 +22,7 @@ export function Sidebar() {
   const activeId = (params?.projectId as string | undefined) ?? null;
 
   const projects = useLiveQuery(async () => {
+    if (typeof window === "undefined") return [];
     const all = await db().projects.toArray();
     return all.sort((a, b) => a.id.localeCompare(b.id));
   }, []);
@@ -42,8 +44,15 @@ export function Sidebar() {
   return (
     <aside className="w-[240px] shrink-0 h-screen sticky top-0 bg-bg border-r border-line flex flex-col">
       <div className="px-4 pt-5 pb-3">
-        <div className="flex items-center justify-between mb-4">
-          <div className="serif text-lg leading-none">Tracker</div>
+        <div className="mb-4">
+          <Image
+            src="/logo.png"
+            alt="Kleinfelder"
+            width={148}
+            height={48}
+            className="object-contain object-left"
+            priority
+          />
         </div>
         <Button onClick={() => setUploadOpen(true)} className="w-full" size="sm" variant="outline">
           <Plus size={14} /> Add project

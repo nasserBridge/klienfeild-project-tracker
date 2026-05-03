@@ -21,7 +21,13 @@ export function HoursByStaffTab({
   );
 
   if (pivot.rows.length === 0) {
-    return <div className="text-sm text-muted">No labor transactions to show.</div>;
+    return (
+      <div className="text-sm text-muted">
+        {trans.length === 0
+          ? "No transaction data — upload the K-Fasts Proj Trans Detail file to see hours by staff."
+          : "No labor transactions match the selected task filter."}
+      </div>
+    );
   }
 
   const cellBg = (h: number) => {

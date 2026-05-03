@@ -11,6 +11,7 @@ export default function Home() {
   const router = useRouter();
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const projects = useLiveQuery(async () => {
+    if (typeof window === "undefined") return [];
     const all = await db().projects.toArray();
     return all.sort((a, b) => a.id.localeCompare(b.id));
   }, []);

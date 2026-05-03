@@ -4,7 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search } from "lucide-react";
+import { Search, X } from "lucide-react";
 import type { TransRow } from "@/lib/types";
 import { fmtMoney, fmtNum } from "@/lib/utils";
 
@@ -12,16 +12,20 @@ const PAGE_SIZE = 50;
 
 export function TransactionsTab({ trans }: { trans: TransRow[] }) {
   const [search, setSearch] = React.useState("");
+  const [taskNum, setTaskNum] = React.useState("");
   const [from, setFrom] = React.useState<string>("");
   const [to, setTo] = React.useState<string>("");
   const [page, setPage] = React.useState(0);
+  const parentRef = React.useRef<HTMLDivElement>(null);
 
   const filtered = React.useMemo(() => {
     const q = search.trim().toLowerCase();
+    const tq = taskNum.trim().toLowerCase();
     return trans
       .filter((t) => {
+        if (tq && !t.taskName.toLowerCase().startsWith(tq)) return false;
         if (q) {
-          const hay = `${t.empVenUnitName} ${t.taskName} ${t.wbs2} ${t.commentDesc ?? ""} ${t.activity ?? ""} ${t.billTitle ?? ""}`.toLowerCase();
+          const hay = `${t.empVenUnitName} ${t.commentDesc ?? ""} ${t.activity ?? ""} ${t.billTitle ?? ""}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         if (from && t.transDate.slice(0, 10) < from) return false;
@@ -29,15 +33,13 @@ export function TransactionsTab({ trans }: { trans: TransRow[] }) {
         return true;
       })
       .sort((a, b) => b.transDate.localeCompare(a.transDate));
-  }, [trans, search, from, to]);
+  }, [trans, search, taskNum, from, to]);
 
-  React.useEffect(() => setPage(0), [search, from, to]);
+  React.useEffect(() => setPage(0), [search, taskNum, from, to]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-  // Virtualize the page rows for nice perf
-  const parentRef = React.useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
     count: paged.length,
     getScrollElement: () => parentRef.current,
@@ -45,29 +47,56 @@ export function TransactionsTab({ trans }: { trans: TransRow[] }) {
     overscan: 10,
   });
 
+  if (trans.length === 0) {
+    return (
+      <div className="text-sm text-muted">
+        No transaction data — upload the K-Fasts Proj Trans Detail file to see transactions.
+      </div>
+    );
+  }
+
+  const hasFilter = search || taskNum || from || to;
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[240px] max-w-[420px]">
+        <div className="relative min-w-[200px] max-w-[280px] flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" size={14} />
           <Input
-            placeholder="Search employee, task, description…"
+            placeholder="Search employee, description…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-8"
           />
+        </div>
+        <div className="relative w-[148px]">
+          <Input
+            placeholder="Task (e.g. 1, 1.1, 2.2)…"
+            value={taskNum}
+            onChange={(e) => setTaskNum(e.target.value)}
+            className="font-mono text-[13px]"
+          />
+          {taskNum && (
+            <button
+              onClick={() => setTaskNum("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-ink"
+            >
+              <X size={13} />
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2 text-xs text-muted">
           <span>From</span>
           <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-[140px] h-9" />
           <span>To</span>
           <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-[140px] h-9" />
-          {(from || to || search) && (
+          {hasFilter && (
             <Button
               size="sm"
               variant="ghost"
               onClick={() => {
                 setSearch("");
+                setTaskNum("");
                 setFrom("");
                 setTo("");
               }}

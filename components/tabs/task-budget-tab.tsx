@@ -5,7 +5,8 @@ import { StatusDot } from "@/components/status-badge";
 import type { AllDataRow, TransRow } from "@/lib/types";
 import { getProjectTotal, getTaskRows, groupTransByEmployee, transForTask } from "@/lib/calculations";
 import { cn, fmtMoney, fmtNum, fmtPct } from "@/lib/utils";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Search, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import type { HealthStatus } from "@/lib/calculations";
 
 type SortKey =
@@ -36,9 +37,22 @@ export function TaskBudgetTab({
   const [sortKey, setSortKey] = React.useState<SortKey>("taskCode");
   const [asc, setAsc] = React.useState(true);
   const [expanded, setExpanded] = React.useState<string | null>(null);
+  const [codeFilter, setCodeFilter] = React.useState("");
+  const [statusFilter, setStatusFilter] = React.useState<"all" | "ok" | "watch" | "bad">("all");
 
   const sorted = React.useMemo(() => {
-    const out = [...tasks];
+    const q = codeFilter.trim().toLowerCase();
+    const out = tasks.filter((t) => {
+      if (q) {
+        // taskName starts with the human task number, e.g. "1.1 Review…", "2.2 Seismic…"
+        if (!t.taskName.toLowerCase().startsWith(q)) return false;
+      }
+      if (statusFilter !== "all") {
+        const s = statusFromPct(t.pctRevenueTaken);
+        if (s !== statusFilter) return false;
+      }
+      return true;
+    });
     out.sort((a, b) => {
       const av = a[sortKey] as number | string;
       const bv = b[sortKey] as number | string;
@@ -48,7 +62,32 @@ export function TaskBudgetTab({
       return ((av as number) - (bv as number)) * (asc ? 1 : -1);
     });
     return out;
-  }, [tasks, sortKey, asc]);
+  }, [tasks, sortKey, asc, codeFilter, statusFilter]);
+
+  // Totals computed from the filtered set (not the project-level rollup)
+  const filteredTotal = React.useMemo(() => {
+    const isFiltered = codeFilter.trim() !== "" || statusFilter !== "all";
+    if (!isFiltered) return null; // use the project-level total row when unfiltered
+    return sorted.reduce(
+      (acc, t) => ({
+        totalFee: acc.totalFee + t.totalFee,
+        netRev: acc.netRev + t.netRev,
+        remainingTotalFee: acc.remainingTotalFee + t.remainingTotalFee,
+        jtdHours: acc.jtdHours + t.jtdHours,
+        laborCost: acc.laborCost + t.laborCost,
+        pctRevenueTaken: 0, // recalculate below
+      }),
+      { totalFee: 0, netRev: 0, remainingTotalFee: 0, jtdHours: 0, laborCost: 0, pctRevenueTaken: 0 },
+    );
+  }, [sorted, codeFilter, statusFilter]);
+
+  const displayTotal = filteredTotal
+    ? {
+        ...filteredTotal,
+        pctRevenueTaken:
+          filteredTotal.totalFee > 0 ? filteredTotal.netRev / filteredTotal.totalFee : 0,
+      }
+    : total;
 
   const onSort = (k: SortKey) => {
     if (sortKey === k) setAsc((v) => !v);
@@ -71,7 +110,51 @@ export function TaskBudgetTab({
     </th>
   );
 
+  const hasFilter = codeFilter.trim() !== "" || statusFilter !== "all";
+
   return (
+    <div className="space-y-3">
+    <div className="flex flex-wrap items-center gap-3">
+      <div className="relative flex-1 min-w-[200px] max-w-[320px]">
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" size={14} />
+        <Input
+          placeholder="Task number (e.g. 1, 1.1, 2.2)…"
+          value={codeFilter}
+          onChange={(e) => setCodeFilter(e.target.value)}
+          className="pl-8 font-mono text-[13px]"
+        />
+        {codeFilter && (
+          <button
+            onClick={() => setCodeFilter("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-ink"
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+      <div className="inline-flex border border-line rounded">
+        {(["all", "ok", "watch", "bad"] as const).map((s, i) => (
+          <button
+            key={s}
+            onClick={() => setStatusFilter(s)}
+            className={cn(
+              "px-3 h-8 text-xs",
+              i > 0 && "border-l border-line",
+              i === 0 && "rounded-l",
+              i === 3 && "rounded-r",
+              statusFilter === s ? "bg-accent text-accent-fg" : "text-ink hover:bg-rowHover",
+            )}
+          >
+            {s === "all" ? "All" : s === "ok" ? "On track" : s === "watch" ? "Watch" : "Over"}
+          </button>
+        ))}
+      </div>
+      {hasFilter && (
+        <span className="text-xs text-muted">
+          {sorted.length} of {tasks.length} task{tasks.length !== 1 ? "s" : ""}
+        </span>
+      )}
+    </div>
     <Card className="overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -134,18 +217,20 @@ export function TaskBudgetTab({
               );
             })}
           </tbody>
-          {total && (
+          {displayTotal && (
             <tfoot className="sticky bottom-0 bg-white border-t border-lineStrong">
               <tr>
                 <td></td>
-                <td className="px-3 py-2 tabular text-[12px] font-medium">Total</td>
+                <td className="px-3 py-2 tabular text-[12px] font-medium">
+                  {hasFilter ? "Subtotal" : "Total"}
+                </td>
                 <td></td>
-                <td className="px-3 py-2 text-right tabular font-medium">{fmtMoney(total.totalFee)}</td>
-                <td className="px-3 py-2 text-right tabular font-medium">{fmtMoney(total.netRev)}</td>
-                <td className="px-3 py-2 text-right tabular font-medium">{fmtMoney(total.remainingTotalFee)}</td>
-                <td className="px-3 py-2 text-right tabular font-medium">{fmtNum(total.jtdHours, 1)}</td>
-                <td className="px-3 py-2 text-right tabular font-medium">{fmtMoney(total.laborCost)}</td>
-                <td className="px-3 py-2 text-right tabular font-medium">{fmtPct(total.pctRevenueTaken, 0)}</td>
+                <td className="px-3 py-2 text-right tabular font-medium">{fmtMoney(displayTotal.totalFee)}</td>
+                <td className="px-3 py-2 text-right tabular font-medium">{fmtMoney(displayTotal.netRev)}</td>
+                <td className="px-3 py-2 text-right tabular font-medium">{fmtMoney(displayTotal.remainingTotalFee)}</td>
+                <td className="px-3 py-2 text-right tabular font-medium">{fmtNum(displayTotal.jtdHours, 1)}</td>
+                <td className="px-3 py-2 text-right tabular font-medium">{fmtMoney(displayTotal.laborCost)}</td>
+                <td className="px-3 py-2 text-right tabular font-medium">{fmtPct(displayTotal.pctRevenueTaken, 0)}</td>
                 <td></td>
               </tr>
             </tfoot>
@@ -153,6 +238,7 @@ export function TaskBudgetTab({
         </table>
       </div>
     </Card>
+    </div>
   );
 }
 
