@@ -1,0 +1,13 @@
+node_modules
+.next
+out
+.env*.local
+.DS_Store
+*.log
+.vercel
+next-env.d.ts
+*.tsbuildinfo
+
+# Real project workbooks — keep local, do NOT push to GitHub.
+# Remove this line if you want to commit fixtures.
+sample-data/
