@@ -46,11 +46,16 @@ import {
 import type {
   AllDataRow,
   ChangeLogRow,
+  CheckDetailRow,
   ETCRow,
   InvoiceLogData,
+  InvoiceSummaryRow,
   NotesData,
   StaffData,
   SubManagementData,
+  TablesData,
+  TaskBudgetRow,
+  TaskSummaryRow,
   TransRow,
 } from "@/lib/types";
 
@@ -66,27 +71,36 @@ export function ProjectShell({ projectId }: { projectId: string }) {
     [projectId],
   );
 
-  // Uploaded sources
+  // Sources from the master tracker XLSX (or its components)
   const allDataR = useDexieGet<{ projectId: string; rows: AllDataRow[] }>("allDataExport", projectId);
   const transR = useDexieGet<{ projectId: string; rows: TransRow[] }>("projTransDetail", projectId);
-  // Manual sources
+  const invoiceSummaryR = useDexieGet<{ projectId: string; rows: InvoiceSummaryRow[] }>("invoiceSummary", projectId);
+  const taskSummaryR = useDexieGet<{ projectId: string; rows: TaskSummaryRow[] }>("taskSummary", projectId);
+  const taskBudgetR = useDexieGet<{ projectId: string; rows: TaskBudgetRow[] }>("taskBudget", projectId);
   const invoiceLogR = useDexieGet<{ projectId: string; data: InvoiceLogData }>("invoiceLog", projectId);
   const changeLogR = useDexieGet<{ projectId: string; rows: ChangeLogRow[] }>("changeLog", projectId);
   const subManagementR = useDexieGet<{ projectId: string; data: SubManagementData }>("subManagement", projectId);
   const staffR = useDexieGet<{ projectId: string; data: StaffData }>("staff", projectId);
   const etcR = useDexieGet<{ projectId: string; rows: ETCRow[] }>("etc", projectId);
   const notesR = useDexieGet<{ projectId: string; data: NotesData }>("notes", projectId);
+  const checkDetailR = useDexieGet<{ projectId: string; rows: CheckDetailRow[] }>("checkDetail", projectId);
+  const tablesR = useDexieGet<{ projectId: string; data: TablesData }>("lookupTables", projectId);
 
   const stillLoading =
     project === undefined ||
     allDataR === undefined ||
     transR === undefined ||
+    invoiceSummaryR === undefined ||
+    taskSummaryR === undefined ||
+    taskBudgetR === undefined ||
     invoiceLogR === undefined ||
     changeLogR === undefined ||
     subManagementR === undefined ||
     staffR === undefined ||
     etcR === undefined ||
-    notesR === undefined;
+    notesR === undefined ||
+    checkDetailR === undefined ||
+    tablesR === undefined;
 
   // ---- IMPORTANT ----
   // All hooks (including useMemo) MUST be called every render, in the same order.
@@ -101,11 +115,19 @@ export function ProjectShell({ projectId }: { projectId: string }) {
   const etcRows = etcR?.rows ?? [];
   const notes = notesR?.data ?? null;
 
-  const taskSummary = React.useMemo(() => deriveTaskSummary(allData), [allData]);
-  const taskBudget = React.useMemo(() => deriveTaskBudget(allData), [allData]);
-  const invoiceSummary = React.useMemo(() => deriveInvoiceSummary(allData), [allData]);
-  const checkDetail = React.useMemo(() => deriveCheckDetail(trans), [trans]);
-  const tables = React.useMemo(() => deriveTables(allData, trans), [allData, trans]);
+  // Prefer uploaded data when present; fall back to derivation from PM Web all-data
+  // so the tabs still light up if only the standalone exports were dropped.
+  const derivedTaskSummary = React.useMemo(() => deriveTaskSummary(allData), [allData]);
+  const derivedTaskBudget = React.useMemo(() => deriveTaskBudget(allData), [allData]);
+  const derivedInvoiceSummary = React.useMemo(() => deriveInvoiceSummary(allData), [allData]);
+  const derivedCheckDetail = React.useMemo(() => deriveCheckDetail(trans), [trans]);
+  const derivedTables = React.useMemo(() => deriveTables(allData, trans), [allData, trans]);
+
+  const taskSummary = (taskSummaryR?.rows?.length ? taskSummaryR.rows : derivedTaskSummary);
+  const taskBudget = (taskBudgetR?.rows?.length ? taskBudgetR.rows : derivedTaskBudget);
+  const invoiceSummary = (invoiceSummaryR?.rows?.length ? invoiceSummaryR.rows : derivedInvoiceSummary);
+  const checkDetail = (checkDetailR?.rows?.length ? checkDetailR.rows : derivedCheckDetail);
+  const tables = tablesR?.data ?? derivedTables;
 
   if (stillLoading) {
     return <div className="p-8 text-sm text-muted">Loading project…</div>;

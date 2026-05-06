@@ -21,17 +21,30 @@ export function InvoiceSummaryTab({ rows }: { rows: InvoiceSummaryRow[] }) {
       paidToDate: a.paidToDate + r.paidToDate,
       arOver60: a.arOver60 + r.arOver60,
       estCurrentInvoice: a.estCurrentInvoice + r.estCurrentInvoice,
+      estimateAtComplete: a.estimateAtComplete + r.estimateAtComplete,
     }),
-    { totalFee: 0, cumInvoiceToDate: 0, jtdRevenue: 0, paidToDate: 0, arOver60: 0, estCurrentInvoice: 0 },
+    {
+      totalFee: 0,
+      cumInvoiceToDate: 0,
+      jtdRevenue: 0,
+      paidToDate: 0,
+      arOver60: 0,
+      estCurrentInvoice: 0,
+      estimateAtComplete: 0,
+    },
   );
   const totalRemaining = totals.totalFee - totals.cumInvoiceToDate;
+  const totalUnpaid = totals.cumInvoiceToDate - totals.paidToDate;
+  const totalPctSpent = totals.totalFee > 0 ? totals.jtdRevenue / totals.totalFee : 0;
+  const totalPctComp = totals.totalFee > 0 ? totals.cumInvoiceToDate / totals.totalFee : 0;
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Chip label="Total Fee" value={fmtMoney(totals.totalFee)} />
-        <Chip label="Total Invoiced To Date" value={fmtMoney(totals.cumInvoiceToDate)} />
-        <Chip label="Total Remaining" value={fmtMoney(totalRemaining)} />
+        <Chip label="Invoiced To Date" value={fmtMoney(totals.cumInvoiceToDate)} />
+        <Chip label="Remaining" value={fmtMoney(totalRemaining)} />
+        <Chip label="Outstanding (Unpaid)" value={fmtMoney(totalUnpaid)} />
       </div>
 
       <Card className="overflow-hidden">
@@ -44,34 +57,42 @@ export function InvoiceSummaryTab({ rows }: { rows: InvoiceSummaryRow[] }) {
                 <Th right>Total Fee</Th>
                 <Th right>Est. Current Invoice</Th>
                 <Th right>Cum Invoice To Date</Th>
+                <Th right>Remaining</Th>
                 <Th right>JTD Revenue</Th>
                 <Th right>EAC</Th>
                 <Th right>% Spent</Th>
                 <Th right>% Comp</Th>
                 <Th right>Paid To Date</Th>
+                <Th right>Outstanding</Th>
                 <Th right>AR Over 60</Th>
                 <Th right>NRM</Th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={`${r.task}-${i}`} className="border-b border-line/60 hover:bg-rowHover">
-                  <td className="px-3 py-1.5 tabular text-[12px]">{r.task}</td>
-                  <td className="px-3 py-1.5 text-[12px] max-w-[280px] truncate" title={r.taskDescription}>
-                    {r.taskDescription}
-                  </td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.totalFee)}</td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.estCurrentInvoice, { cents: true })}</td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.cumInvoiceToDate, { cents: true })}</td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.jtdRevenue, { cents: true })}</td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.estimateAtComplete, { cents: true })}</td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtPct(r.pctSpent, 0)}</td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtPct(r.pctComp, 0)}</td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.paidToDate, { cents: true })}</td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.arOver60)}</td>
-                  <td className="px-3 py-1.5 text-right tabular text-[12px]">{r.nrm.toFixed(2)}</td>
-                </tr>
-              ))}
+              {rows.map((r, i) => {
+                const remaining = r.totalFee - r.cumInvoiceToDate;
+                const outstanding = r.cumInvoiceToDate - r.paidToDate;
+                return (
+                  <tr key={`${r.task}-${i}`} className="border-b border-line/60 hover:bg-rowHover">
+                    <td className="px-3 py-1.5 tabular text-[12px]">{r.task}</td>
+                    <td className="px-3 py-1.5 text-[12px] max-w-[280px] truncate" title={r.taskDescription}>
+                      {r.taskDescription}
+                    </td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.totalFee)}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.estCurrentInvoice, { cents: true })}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.cumInvoiceToDate, { cents: true })}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(remaining)}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.jtdRevenue, { cents: true })}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.estimateAtComplete, { cents: true })}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtPct(r.pctSpent, 0)}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtPct(r.pctComp, 0)}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.paidToDate, { cents: true })}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(outstanding)}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{fmtMoney(r.arOver60)}</td>
+                    <td className="px-3 py-1.5 text-right tabular text-[12px]">{r.nrm.toFixed(2)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot className="bg-white border-t border-lineStrong sticky bottom-0">
               <tr>
@@ -79,9 +100,13 @@ export function InvoiceSummaryTab({ rows }: { rows: InvoiceSummaryRow[] }) {
                 <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtMoney(totals.totalFee)}</td>
                 <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtMoney(totals.estCurrentInvoice, { cents: true })}</td>
                 <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtMoney(totals.cumInvoiceToDate, { cents: true })}</td>
+                <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtMoney(totalRemaining)}</td>
                 <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtMoney(totals.jtdRevenue, { cents: true })}</td>
-                <td colSpan={3}></td>
+                <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtMoney(totals.estimateAtComplete, { cents: true })}</td>
+                <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtPct(totalPctSpent, 0)}</td>
+                <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtPct(totalPctComp, 0)}</td>
                 <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtMoney(totals.paidToDate, { cents: true })}</td>
+                <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtMoney(totalUnpaid)}</td>
                 <td className="px-3 py-2 text-right tabular text-[12px] font-medium">{fmtMoney(totals.arOver60)}</td>
                 <td></td>
               </tr>

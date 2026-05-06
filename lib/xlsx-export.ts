@@ -541,14 +541,21 @@ function etcSheet(rows: ETCRow[]): SheetSpec | null {
 
 function invoiceSummarySheet(rows: InvoiceSummaryRow[]): SheetSpec | null {
   if (!rows.length) return null;
+  const enriched = rows.map((r) => ({
+    ...r,
+    remaining: r.totalFee - r.cumInvoiceToDate,
+    outstanding: r.cumInvoiceToDate - r.paidToDate,
+  }));
   const total = {
-    totalFee: sumNum(rows, (r) => r.totalFee),
-    estCurrentInvoice: sumNum(rows, (r) => r.estCurrentInvoice),
-    cumInvoiceToDate: sumNum(rows, (r) => r.cumInvoiceToDate),
-    jtdRevenue: sumNum(rows, (r) => r.jtdRevenue),
-    estimateAtComplete: sumNum(rows, (r) => r.estimateAtComplete),
-    paidToDate: sumNum(rows, (r) => r.paidToDate),
-    arOver60: sumNum(rows, (r) => r.arOver60),
+    totalFee: sumNum(enriched, (r) => r.totalFee),
+    estCurrentInvoice: sumNum(enriched, (r) => r.estCurrentInvoice),
+    cumInvoiceToDate: sumNum(enriched, (r) => r.cumInvoiceToDate),
+    remaining: sumNum(enriched, (r) => r.remaining),
+    jtdRevenue: sumNum(enriched, (r) => r.jtdRevenue),
+    estimateAtComplete: sumNum(enriched, (r) => r.estimateAtComplete),
+    paidToDate: sumNum(enriched, (r) => r.paidToDate),
+    outstanding: sumNum(enriched, (r) => r.outstanding),
+    arOver60: sumNum(enriched, (r) => r.arOver60),
   };
   return {
     name: "Invoice Summary",
@@ -558,15 +565,17 @@ function invoiceSummarySheet(rows: InvoiceSummaryRow[]): SheetSpec | null {
       { header: "Total Fee", key: "totalFee", type: "money2" },
       { header: "Est. Current Invoice", key: "estCurrentInvoice", type: "money2" },
       { header: "Cum Invoice To Date", key: "cumInvoiceToDate", type: "money2" },
+      { header: "Remaining", key: "remaining", type: "money2" },
       { header: "JTD Revenue", key: "jtdRevenue", type: "money2" },
       { header: "EAC", key: "estimateAtComplete", type: "money2" },
       { header: "% Spent", key: "pctSpent", type: "pct1" },
       { header: "% Comp", key: "pctComp", type: "pct1" },
       { header: "Paid To Date", key: "paidToDate", type: "money2" },
+      { header: "Outstanding", key: "outstanding", type: "money2" },
       { header: "AR Over 60", key: "arOver60", type: "money2" },
       { header: "NRM", key: "nrm", type: "num2" },
     ],
-    rows,
+    rows: enriched,
     total: { label: "TOTAL", values: total },
   };
 }

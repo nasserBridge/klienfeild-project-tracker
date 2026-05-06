@@ -46,17 +46,32 @@ export function InvoiceLogTab({
       ],
     });
   };
-  const addPeriod = () => {
-    const date = prompt("Period start date (YYYY-MM-01):", new Date().toISOString().slice(0, 7) + "-01");
-    if (!date) return;
-    const iso = new Date(date).toISOString();
-    if (current.periods.some((p) => p.date === iso)) return;
-    const d = new Date(iso);
-    const label = d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+  const [periodPickerOpen, setPeriodPickerOpen] = React.useState(false);
+  const [newPeriodMonth, setNewPeriodMonth] = React.useState<string>(
+    new Date().toISOString().slice(0, 7),
+  );
+
+  const commitNewPeriod = (monthStr: string) => {
+    if (!/^\d{4}-\d{2}$/.test(monthStr)) return;
+    const [y, m] = monthStr.split("-").map((s) => parseInt(s, 10));
+    if (!y || !m) return;
+    const iso = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+    if (current.periods.some((p) => p.date === iso)) {
+      setPeriodPickerOpen(false);
+      return;
+    }
+    const label = new Date(iso).toLocaleDateString("en-US", {
+      month: "short",
+      year: "2-digit",
+      timeZone: "UTC",
+    });
     persist({
       ...current,
-      periods: [...current.periods, { date: iso, label }].sort((a, b) => a.date.localeCompare(b.date)),
+      periods: [...current.periods, { date: iso, label }].sort((a, b) =>
+        a.date.localeCompare(b.date),
+      ),
     });
+    setPeriodPickerOpen(false);
   };
   const removePeriod = (date: string) => {
     if (!confirm(`Remove period ${date.slice(0, 7)}?`)) return;
@@ -81,9 +96,32 @@ export function InvoiceLogTab({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-end gap-2">
-        <Button size="sm" variant="outline" onClick={addPeriod}>
-          <Plus size={13} /> Add period
-        </Button>
+        {periodPickerOpen ? (
+          <div className="flex items-center gap-2 border border-line rounded px-2 py-1 bg-white">
+            <span className="text-[11px] text-muted">Period month</span>
+            <Input
+              type="month"
+              value={newPeriodMonth}
+              onChange={(e) => setNewPeriodMonth(e.target.value)}
+              className="h-7 text-[12px] w-[140px]"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitNewPeriod(newPeriodMonth);
+                if (e.key === "Escape") setPeriodPickerOpen(false);
+              }}
+            />
+            <Button size="sm" onClick={() => commitNewPeriod(newPeriodMonth)}>
+              Add
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setPeriodPickerOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => setPeriodPickerOpen(true)}>
+            <Plus size={13} /> Add period
+          </Button>
+        )}
         <Button size="sm" variant="outline" onClick={addRow}>
           <Plus size={13} /> Add firm
         </Button>

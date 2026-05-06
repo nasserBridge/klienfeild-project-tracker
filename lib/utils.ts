@@ -85,13 +85,27 @@ export function toIsoDate(v: unknown): string | null {
     if (Number.isNaN(v.getTime())) return null;
     return v.toISOString();
   }
-  if (typeof v === "number") {
-    // Excel serial date (days since 1899-12-30)
-    const ms = Math.round((v - 25569) * 86400 * 1000);
+  const fromExcelSerial = (n: number): string | null => {
+    // Excel serial date (days since 1899-12-30). Reasonable range: 1900..2100.
+    if (!Number.isFinite(n) || n < 1 || n > 80000) return null;
+    const ms = Math.round((n - 25569) * 86400 * 1000);
     const d = new Date(ms);
     return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  };
+  if (typeof v === "number") {
+    return fromExcelSerial(v);
   }
   if (typeof v === "string") {
+    // Numeric string that looks like an Excel serial (e.g. "45992")
+    if (/^\d+(\.\d+)?$/.test(v.trim())) {
+      const n = Number(v.trim());
+      // Heuristic: 4–5 digit integers in the Excel serial range are dates,
+      // smaller numbers are probably just amounts.
+      if (n >= 20000 && n < 80000) {
+        const iso = fromExcelSerial(n);
+        if (iso) return iso;
+      }
+    }
     const d = new Date(v);
     return Number.isNaN(d.getTime()) ? null : d.toISOString();
   }

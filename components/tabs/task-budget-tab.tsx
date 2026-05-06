@@ -21,7 +21,7 @@ type SortKey =
 
 function statusFromPct(pct: number): HealthStatus {
   if (pct > 1) return "bad";
-  if (pct >= 0.85) return "watch";
+  if (pct >= 0.9) return "watch";
   return "ok";
 }
 
