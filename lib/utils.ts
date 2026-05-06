@@ -5,22 +5,29 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/**
+ * Money formatter. Defaults to 2-decimal display ("$1,234.56").
+ * - `cents: false` keeps 2 decimals — kept for backward compatibility but no longer hides cents.
+ * - `compact: true` formats large values as "1.23M" / "1.5K" (still 2 decimals on M).
+ */
 export function fmtMoney(n: number | null | undefined, opts?: { compact?: boolean; cents?: boolean }) {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
   const absV = Math.abs(n);
   if (opts?.compact && absV >= 1000) {
     if (absV >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-    if (absV >= 1000) return `${(n / 1000).toFixed(1)}K`;
+    if (absV >= 1000) return `${(n / 1000).toFixed(2)}K`;
   }
+  // Always show 2 decimal places.
   return n.toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: opts?.cents ? 2 : 0,
-    maximumFractionDigits: opts?.cents ? 2 : 0,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   });
 }
 
-export function fmtNum(n: number | null | undefined, decimals = 0) {
+/** Number formatter. Defaults to 2 decimal places. */
+export function fmtNum(n: number | null | undefined, decimals = 2) {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
   return n.toLocaleString("en-US", {
     minimumFractionDigits: decimals,
@@ -28,9 +35,16 @@ export function fmtNum(n: number | null | undefined, decimals = 0) {
   });
 }
 
-export function fmtPct(n: number | null | undefined, decimals = 1) {
+/** Percentage formatter. Input is a 0–1 decimal. Defaults to 2 decimal places. */
+export function fmtPct(n: number | null | undefined, decimals = 2) {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
   return `${(n * 100).toFixed(decimals)}%`;
+}
+
+/** Round a number to 2 decimal places (avoids floating-point accumulation drift). */
+export function round2(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100) / 100;
 }
 
 export function fmtDate(iso: string | null | undefined) {

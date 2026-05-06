@@ -1,5 +1,281 @@
-import type { AllDataRow, TransRow } from "./types";
-import { daysBetween, monthKey, weekStartingMonday } from "./utils";
+import type {
+  AllDataRow,
+  CheckDetailRow,
+  InvoiceSummaryRow,
+  PeriodRow,
+  TablesData,
+  TaskBudgetRow,
+  TaskSummaryRow,
+  TransRow,
+} from "./types";
+import { daysBetween, monthKey, round2, weekStartingMonday } from "./utils";
+
+// === Auto-derivations from PM Web + K-Fasts =======================================
+
+const sumTaskOf = (taskCode: string | null): string | null => {
+  if (!taskCode) return null;
+  const m = taskCode.match(/^(\d{2})-/);
+  return m ? m[1] : null;
+};
+
+/** Group sub-task rows by their summary task (XX-) and aggregate. */
+export function deriveTaskSummary(allData: AllDataRow[]): TaskSummaryRow[] {
+  const subTasks = allData.filter((r) => !r.isTotalRow && !r.isSummaryTask && r.taskCode);
+  const summaryRows = allData.filter((r) => r.isSummaryTask && r.taskCode);
+  const map = new Map<string, AllDataRow[]>();
+  for (const r of subTasks) {
+    const k = sumTaskOf(r.taskCode);
+    if (!k) continue;
+    if (!map.has(k)) map.set(k, []);
+    map.get(k)!.push(r);
+  }
+  const out: TaskSummaryRow[] = [];
+  for (const [sumTask, rows] of [...map.entries()].sort()) {
+    // Use the matching summary task row's name when available
+    const summaryRow = summaryRows.find((r) => sumTaskOf(r.taskCode) === sumTask);
+    const taskDescription =
+      summaryRow?.taskName ??
+      (rows[0]?.taskName ?? "").replace(/^\d+(\.\d+)*\s+/, "");
+    const totalFee = round2(rows.reduce((s, r) => s + r.totalFee, 0));
+    const laborFee = round2(rows.reduce((s, r) => s + r.laborFee, 0));
+    const reimbursableFee = round2(rows.reduce((s, r) => s + r.reimbFee, 0));
+    const subFee = round2(rows.reduce((s, r) => s + r.consultFee, 0));
+    const jtdRevenue = round2(rows.reduce((s, r) => s + r.netRev, 0));
+    const feeRemaining = round2(rows.reduce((s, r) => s + r.remainingTotalFee, 0));
+    const pctComplete = totalFee > 0 ? round2((jtdRevenue / totalFee) * 10000) / 10000 : 0;
+    // ETC defaults: remaining fee, EAC = JTD + ETC
+    const estimateToComp = round2(Math.max(0, feeRemaining));
+    const estimateAtComp = round2(jtdRevenue + estimateToComp);
+    const variance = round2(totalFee - estimateAtComp);
+    const pctSpent = totalFee > 0 ? round2((jtdRevenue / totalFee) * 10000) / 10000 : 0;
+    out.push({
+      sumTask,
+      taskNo: "",
+      taskDescription,
+      laborFee,
+      reimbursableFee,
+      labFee: 0,
+      subFee,
+      changeOrderAmt: 0,
+      totalFee,
+      jtdRevenue,
+      feeRemaining,
+      pctComplete,
+      estimateToComp,
+      estimateAtComp,
+      variance,
+      pctSpent,
+      startDate: rows[0]?.startDate ?? null,
+      endDate: rows[0]?.estCompDate ?? null,
+    });
+  }
+  return out;
+}
+
+/** Sub-task rows with ETC/EAC defaults derived from PM Web. */
+export function deriveTaskBudget(allData: AllDataRow[]): TaskBudgetRow[] {
+  const subTasks = allData.filter((r) => !r.isTotalRow && !r.isSummaryTask && r.taskCode);
+  return subTasks.map((r) => {
+    const totalFee = round2(r.totalFee);
+    const jtdRevenue = round2(r.netRev);
+    const feeRemaining = round2(r.remainingTotalFee);
+    const estimateToComp = round2(Math.max(0, feeRemaining));
+    const estimateAtComp = round2(jtdRevenue + estimateToComp);
+    return {
+      sumTask: sumTaskOf(r.taskCode) ?? "",
+      taskNo: r.taskCode ?? "",
+      taskDescription: r.taskName,
+      laborFee: round2(r.laborFee),
+      reimbursableFee: round2(r.reimbFee),
+      labFee: 0,
+      subFee: round2(r.consultFee),
+      changeOrderAmt: 0,
+      totalFee,
+      jtdRevenue,
+      feeRemaining,
+      pctComplete: totalFee > 0 ? Math.round((jtdRevenue / totalFee) * 10000) / 10000 : 0,
+      estimateToComp,
+      estimateAtComp,
+      variance: round2(totalFee - estimateAtComp),
+      pctSpent: totalFee > 0 ? Math.round((jtdRevenue / totalFee) * 10000) / 10000 : 0,
+      startDate: r.startDate,
+      endDate: r.estCompDate,
+      isSummaryHeader: false,
+    };
+  });
+}
+
+/** Invoice Summary aggregated by sum task. */
+export function deriveInvoiceSummary(allData: AllDataRow[]): InvoiceSummaryRow[] {
+  const subTasks = allData.filter((r) => !r.isTotalRow && !r.isSummaryTask && r.taskCode);
+  const summaryRows = allData.filter((r) => r.isSummaryTask && r.taskCode);
+  const map = new Map<string, AllDataRow[]>();
+  for (const r of subTasks) {
+    const k = sumTaskOf(r.taskCode);
+    if (!k) continue;
+    if (!map.has(k)) map.set(k, []);
+    map.get(k)!.push(r);
+  }
+  const out: InvoiceSummaryRow[] = [];
+  for (const [task, rows] of [...map.entries()].sort()) {
+    const summaryRow = summaryRows.find((r) => sumTaskOf(r.taskCode) === task);
+    const taskDescription =
+      summaryRow?.taskName ??
+      (rows[0]?.taskName ?? "").replace(/^\d+(\.\d+)*\s+/, "");
+    const totalFee = round2(rows.reduce((s, r) => s + r.totalFee, 0));
+    const cumInvoiceToDate = round2(rows.reduce((s, r) => s + r.billedTotal, 0));
+    const jtdRevenue = round2(rows.reduce((s, r) => s + r.netRev, 0));
+    const paidToDate = round2(rows.reduce((s, r) => s + r.receivedAmount, 0));
+    const arOver60 = 0; // PM Web all-data doesn't surface AR aging at task level
+    const nrm = round2(avg(rows.map((r) => r.multiplierJtd ?? 0).filter((n) => n > 0)));
+    const remaining = round2(rows.reduce((s, r) => s + r.remainingTotalFee, 0));
+    const eac = round2(totalFee + Math.max(0, jtdRevenue - cumInvoiceToDate - remaining));
+    out.push({
+      task,
+      taskDescription,
+      totalFee,
+      estCurrentInvoice: 0,
+      cumInvoiceToDate,
+      jtdRevenue,
+      estimateAtComplete: round2(Math.max(eac, totalFee)),
+      pctSpent: totalFee > 0 ? Math.round((cumInvoiceToDate / totalFee) * 10000) / 10000 : 0,
+      pctComp: totalFee > 0 ? Math.round((jtdRevenue / totalFee) * 10000) / 10000 : 0,
+      paidToDate,
+      arOver60,
+      nrm,
+    });
+  }
+  return out;
+}
+
+/** Pivot K-Fasts trans by WBS2 × Employee → CheckDetail rows with subtotals. */
+export function deriveCheckDetail(trans: TransRow[]): CheckDetailRow[] {
+  // Group by WBS2; within each, by employee. Emit per-employee row, then a "Total" subtotal row.
+  const byTask = new Map<string, { taskName: string; byEmp: Map<string, { hrs: number; bill: number }> }>();
+  for (const t of trans) {
+    if (!t.wbs2) continue;
+    if (!byTask.has(t.wbs2)) byTask.set(t.wbs2, { taskName: t.taskName, byEmp: new Map() });
+    const g = byTask.get(t.wbs2)!;
+    if (!g.byEmp.has(t.empVenUnitName))
+      g.byEmp.set(t.empVenUnitName, { hrs: 0, bill: 0 });
+    const e = g.byEmp.get(t.empVenUnitName)!;
+    e.hrs += t.hrsQty;
+    e.bill += t.billAmt;
+  }
+  const out: CheckDetailRow[] = [];
+  for (const [wbs2, g] of [...byTask.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    let subHrs = 0;
+    let subBill = 0;
+    for (const [emp, v] of [...g.byEmp.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      out.push({
+        wbs2,
+        taskName: g.taskName,
+        empVenUnitName: emp,
+        hrsQty: round2(v.hrs),
+        billAmt: round2(v.bill),
+        isSubtotal: false,
+      });
+      subHrs += v.hrs;
+      subBill += v.bill;
+    }
+    out.push({
+      wbs2,
+      taskName: g.taskName,
+      empVenUnitName: "",
+      hrsQty: round2(subHrs),
+      billAmt: round2(subBill),
+      isSubtotal: true,
+    });
+  }
+  return out;
+}
+
+/** Build Tables data (periods + tasks + sumTasks lookup) from PM Web + K-Fasts. */
+export function deriveTables(allData: AllDataRow[], trans: TransRow[]): TablesData {
+  // Periods from K-Fasts: collect unique YYYYPP codes, derive month/year from min trans date in period
+  const periodSet = new Map<string, { earliest: string }>();
+  for (const t of trans) {
+    if (!t.period) continue;
+    if (!periodSet.has(t.period)) periodSet.set(t.period, { earliest: t.transDate });
+    else {
+      const cur = periodSet.get(t.period)!;
+      if (t.transDate < cur.earliest) cur.earliest = t.transDate;
+    }
+  }
+  const periods = [...periodSet.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([code, info]) => {
+      const d = new Date(info.earliest);
+      const month = d.toLocaleDateString("en-US", { month: "short" });
+      const year = String(d.getUTCFullYear());
+      const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
+      return { billedPeriod: code, month, year, date };
+    });
+
+  // Tasks (sub-tasks) and SumTasks from PM Web
+  const tasks = allData
+    .filter((r) => r.taskCode && !r.isTotalRow && !r.isSummaryTask)
+    .map((r) => ({
+      taskNo: r.taskCode!,
+      taskDescription: r.taskName,
+      taskNoDescription: `${r.taskCode} - ${r.taskName}`,
+      summaryTask: sumTaskOf(r.taskCode) ?? "",
+    }));
+
+  const sumTasks = allData
+    .filter((r) => r.isSummaryTask && r.taskCode)
+    .map((r) => ({
+      sumTask: sumTaskOf(r.taskCode) ?? "",
+      summaryDescription: r.taskName,
+      summaryNoDescriptions: `${sumTaskOf(r.taskCode) ?? ""} - ${r.taskName}`,
+    }));
+
+  return { periods, tasks, sumTasks };
+}
+
+function avg(ns: number[]): number {
+  if (ns.length === 0) return 0;
+  return ns.reduce((a, b) => a + b, 0) / ns.length;
+}
+
+/** Hours from K-Fasts in the current calendar month. Labor only. */
+export function mtdLaborHours(trans: TransRow[]): number {
+  const now = new Date();
+  const m = now.getUTCMonth();
+  const y = now.getUTCFullYear();
+  return round2(
+    trans
+      .filter((t) => t.isLabor)
+      .filter((t) => {
+        const d = new Date(t.transDate);
+        return d.getUTCFullYear() === y && d.getUTCMonth() === m;
+      })
+      .reduce((s, t) => s + t.hrsQty, 0),
+  );
+}
+
+/** Hours from K-Fasts in the last 7 days (inclusive). Labor only. */
+export function last7DaysHours(trans: TransRow[]): number {
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - 7);
+  const cutMs = cutoff.getTime();
+  return round2(
+    trans
+      .filter((t) => t.isLabor)
+      .filter((t) => new Date(t.transDate).getTime() >= cutMs)
+      .reduce((s, t) => s + t.hrsQty, 0),
+  );
+}
+
+/** Map a fiscal period code (YYYYPP) to its calendar label using tables. */
+export function periodLabelFromTables(periodCode: string, periods: PeriodRow[]): string {
+  const p = periods.find((x) => x.billedPeriod === periodCode);
+  if (!p) {
+    if (/^\d{6}$/.test(periodCode)) return `FY${periodCode.slice(2, 4)} P${periodCode.slice(4)}`;
+    return periodCode;
+  }
+  return `${p.month} ${p.year}`;
+}
 
 export type HealthStatus = "ok" | "watch" | "bad";
 
@@ -93,7 +369,7 @@ export function cumulativeHours(trans: TransRow[]): { date: string; hours: numbe
   let cum = 0;
   return sorted.map(([date, hours]) => {
     cum += hours;
-    return { date, hours, cumulative: Math.round(cum * 100) / 100 };
+    return { date, hours: round2(hours), cumulative: round2(cum) };
   });
 }
 
@@ -132,19 +408,31 @@ export function staffPivot(
 
   const sortedBuckets = [...buckets].sort();
   const rows = [...rowMap.entries()]
-    .map(([employee, cells]) => ({
-      employee,
-      cells,
-      total: employeeTotals.get(employee) ?? 0,
-    }))
+    .map(([employee, cells]) => {
+      const roundedCells: Record<string, number> = {};
+      for (const k of Object.keys(cells)) roundedCells[k] = round2(cells[k]);
+      return {
+        employee,
+        cells: roundedCells,
+        total: round2(employeeTotals.get(employee) ?? 0),
+      };
+    })
     .sort((a, b) => b.total - a.total);
 
   let max = 0;
   for (const r of rows) for (const k of sortedBuckets) max = Math.max(max, r.cells[k] ?? 0);
 
-  const grand = [...employeeTotals.values()].reduce((a, b) => a + b, 0);
+  const roundedBucketTotals: Record<string, number> = {};
+  for (const k of Object.keys(bucketTotals)) roundedBucketTotals[k] = round2(bucketTotals[k]);
+  const grand = round2([...employeeTotals.values()].reduce((a, b) => a + b, 0));
 
-  return { buckets: sortedBuckets, rows, bucketTotals, grandTotal: grand, maxCell: max };
+  return {
+    buckets: sortedBuckets,
+    rows,
+    bucketTotals: roundedBucketTotals,
+    grandTotal: grand,
+    maxCell: round2(max),
+  };
 }
 
 export type TaskPivot = {
@@ -175,10 +463,16 @@ export function taskPivot(trans: TransRow[]): TaskPivot {
 
   const sortedEmployees = [...employees].sort((a, b) => (empTotals[b] ?? 0) - (empTotals[a] ?? 0));
   const rows = [...taskMap.entries()]
-    .map(([taskCode, v]) => ({ taskCode, ...v }))
+    .map(([taskCode, v]) => {
+      const roundedCells: Record<string, number> = {};
+      for (const k of Object.keys(v.cells)) roundedCells[k] = round2(v.cells[k]);
+      return { taskCode, taskName: v.taskName, cells: roundedCells, total: round2(v.total) };
+    })
     .sort((a, b) => a.taskCode.localeCompare(b.taskCode));
 
-  return { employees: sortedEmployees, rows, empTotals, grandTotal: grand };
+  const roundedEmpTotals: Record<string, number> = {};
+  for (const k of Object.keys(empTotals)) roundedEmpTotals[k] = round2(empTotals[k]);
+  return { employees: sortedEmployees, rows, empTotals: roundedEmpTotals, grandTotal: round2(grand) };
 }
 
 export type RevenueByPeriod = {
@@ -196,9 +490,9 @@ export function revenueByPeriod(trans: TransRow[]): RevenueByPeriod {
   let cum = 0;
   const rows = sorted.map(([period, revenue]) => {
     cum += revenue;
-    return { period, revenue, cumulative: cum };
+    return { period, revenue: round2(revenue), cumulative: round2(cum) };
   });
-  return { rows, total: cum };
+  return { rows, total: round2(cum) };
 }
 
 export function uniqueTaskOptions(rows: AllDataRow[]): { code: string; name: string }[] {
@@ -219,8 +513,8 @@ export function groupTransByEmployee(trans: TransRow[]): { employee: string; row
     .map(([employee, rows]) => ({
       employee,
       rows: rows.sort((a, b) => a.transDate.localeCompare(b.transDate)),
-      totalHours: rows.reduce((s, r) => s + r.hrsQty, 0),
-      totalBill: rows.reduce((s, r) => s + r.billAmt, 0),
+      totalHours: round2(rows.reduce((s, r) => s + r.hrsQty, 0)),
+      totalBill: round2(rows.reduce((s, r) => s + r.billAmt, 0)),
     }))
     .sort((a, b) => b.totalHours - a.totalHours);
 }

@@ -10,18 +10,30 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { UploadCloud, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
-import { detectFile, readWorkbook } from "@/lib/parsers/detect";
-import { parseAllData } from "@/lib/parsers/pmweb";
-import { parseTrans } from "@/lib/parsers/kfasts";
-import { saveAllData, saveTrans, upsertProject, getProject } from "@/lib/db";
+import { UploadCloud, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2, X } from "lucide-react";
+import {
+  detectXlsx,
+  parseAllDataFromXlsx,
+  parseTransFromXlsx,
+  readXlsxFile,
+  type XlsxDetection,
+  type XlsxKind,
+} from "@/lib/parsers/xlsx";
+import { db, getProject, upsertProject } from "@/lib/db";
+import type { ProjectMeta } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import * as XLSX from "xlsx";
 
 type Detected = {
   file: File;
-  kind: "all-data" | "trans" | "unknown";
-  label: string;
-  error?: string;
+  workbook: XLSX.WorkBook;
+  detection: XlsxDetection;
+};
+
+const KIND_LABEL: Record<XlsxKind, string> = {
+  "all-data": "PM Web All-Data Export",
+  trans: "K-Fasts Proj Trans Detail",
+  unknown: "Unknown workbook",
 };
 
 export function UploadDialog({
@@ -48,35 +60,44 @@ export function UploadDialog({
   const onFiles = async (files: FileList | File[]) => {
     setError(null);
     const arr = Array.from(files).filter((f) => /\.xlsx$/i.test(f.name));
+    const ignored = Array.from(files).filter((f) => !/\.xlsx$/i.test(f.name));
     if (arr.length === 0) {
-      setError("Please drop .xlsx files only.");
+      setError(
+        ignored.length
+          ? `Only .xlsx files are accepted. Ignored: ${ignored.map((f) => f.name).join(", ")}`
+          : "No files were dropped.",
+      );
       return;
     }
     const next: Detected[] = [];
     for (const file of arr) {
       try {
-        const wb = await readWorkbook(file);
-        const det = detectFile(wb);
-        next.push({ file, kind: det.kind, label: det.label });
+        const wb = await readXlsxFile(file);
+        const det = detectXlsx(wb);
+        next.push({ file, workbook: wb, detection: det });
       } catch (e) {
         next.push({
           file,
-          kind: "unknown",
-          label: "Unable to read",
-          error: (e as Error).message,
+          workbook: { SheetNames: [], Sheets: {} } as unknown as XLSX.WorkBook,
+          detection: { kind: "unknown", sheetName: null, headerRowIndex: null, label: `Read error: ${(e as Error).message}` },
         });
       }
     }
-    setItems((prev) => mergeDetections(prev, next));
+    // De-duplicate: one per kind (so re-dropping replaces previous selection)
+    setItems((prev) => {
+      const map = new Map<string, Detected>();
+      for (const d of [...prev, ...next]) {
+        const key = d.detection.kind === "unknown" ? `unknown:${d.file.name}` : d.detection.kind;
+        map.set(key, d);
+      }
+      return [...map.values()];
+    });
   };
 
-  const mergeDetections = (prev: Detected[], next: Detected[]): Detected[] => {
-    const map = new Map<string, Detected>();
-    for (const d of [...prev, ...next]) {
-      // Keep one per kind; later overwrites earlier
-      map.set(d.kind, d);
-    }
-    return [...map.values()];
+  const removeItem = (key: string) => {
+    setItems((prev) =>
+      prev.filter((d) => (d.detection.kind === "unknown" ? `unknown:${d.file.name}` : d.detection.kind) !== key),
+    );
   };
 
   const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -85,8 +106,9 @@ export function UploadDialog({
     if (e.dataTransfer.files?.length) void onFiles(e.dataTransfer.files);
   };
 
-  const allData = items.find((i) => i.kind === "all-data");
-  const trans = items.find((i) => i.kind === "trans");
+  const allData = items.find((i) => i.detection.kind === "all-data");
+  const trans = items.find((i) => i.detection.kind === "trans");
+  const known = items.filter((i) => i.detection.kind !== "unknown");
   const canSave = !!(allData || trans);
 
   const onSave = async () => {
@@ -94,73 +116,58 @@ export function UploadDialog({
     setError(null);
     try {
       let projectId: string | null = null;
-      let projectName = "";
-      let pmName = "";
-      let startDate: string | null = null;
-      let estCompDate: string | null = null;
-      let shortName = "";
-      let allDataParsed = false;
+      let metaPatch: Partial<ProjectMeta> = {};
 
       if (allData) {
-        const wb = await readWorkbook(allData.file);
-        const parsed = parseAllData(wb);
-        if (!parsed) throw new Error("Could not parse PM Web export — headers not detected.");
+        const parsed = parseAllDataFromXlsx(allData.workbook, allData.detection);
+        if (!parsed) throw new Error("PM Web All-Data Export couldn't be parsed.");
         projectId = parsed.meta.id;
-        projectName = parsed.meta.name;
-        pmName = parsed.meta.pmName;
-        startDate = parsed.meta.startDate;
-        estCompDate = parsed.meta.estCompDate;
-        shortName = parsed.meta.shortName;
-        await saveAllData(projectId, parsed.rows);
-        allDataParsed = true;
+        metaPatch = {
+          id: parsed.meta.id,
+          name: parsed.meta.name,
+          shortName: parsed.meta.shortName,
+          pmName: parsed.meta.pmName,
+          startDate: parsed.meta.startDate,
+          estCompDate: parsed.meta.estCompDate,
+        };
+        await db().allDataExport.put({ projectId: parsed.meta.id, rows: parsed.rows });
       }
 
-      let transRowsCount = 0;
-      let parsedTrans: Awaited<ReturnType<typeof parseTrans>> = null;
-      if (trans) {
-        const wb = await readWorkbook(trans.file);
-        parsedTrans = parseTrans(wb);
-        if (!parsedTrans) throw new Error("Could not parse Proj Trans Detail — headers not detected.");
-        transRowsCount = parsedTrans.length;
-      }
-
-      // If we don't have a projectId from PM Web, use existing project's id (if user is re-uploading
-      // just the trans file) — pull project id from URL.
       if (!projectId) {
-        const pathProjectId = window.location.pathname.split("/")[1];
+        // Try current path
+        const pathProjectId = decodeURIComponent(window.location.pathname.split("/")[1] ?? "");
         if (pathProjectId) {
           const existing = await getProject(pathProjectId);
-          if (existing) {
-            projectId = existing.id;
-            projectName = existing.name;
-            pmName = existing.pmName;
-            startDate = existing.startDate;
-            estCompDate = existing.estCompDate;
-            shortName = existing.shortName;
-          }
+          if (existing) projectId = existing.id;
         }
       }
-      if (!projectId) throw new Error("Add a PM Web export first to register the project.");
+      if (!projectId) {
+        throw new Error("Add a PM Web All-Data Export at least once to register the project.");
+      }
 
-      if (parsedTrans) {
-        await saveTrans(projectId, parsedTrans);
+      if (trans) {
+        const transRows = parseTransFromXlsx(trans.workbook, trans.detection);
+        await db().projTransDetail.put({ projectId, rows: transRows });
       }
 
       const existing = await getProject(projectId);
+      const uploaded = { ...(existing?.uploaded ?? {}) };
+      if (allData) uploaded["all-data"] = true;
+      if (trans) uploaded["trans"] = true;
+
       await upsertProject({
         id: projectId,
-        name: projectName || existing?.name || projectId,
-        shortName: shortName || existing?.shortName || "",
-        pmName: pmName || existing?.pmName || "",
-        startDate: startDate ?? existing?.startDate ?? null,
-        estCompDate: estCompDate ?? existing?.estCompDate ?? null,
+        name: metaPatch.name ?? existing?.name ?? projectId,
+        shortName: metaPatch.shortName ?? existing?.shortName ?? "",
+        pmName: metaPatch.pmName ?? existing?.pmName ?? "",
+        startDate: metaPatch.startDate ?? existing?.startDate ?? null,
+        estCompDate: metaPatch.estCompDate ?? existing?.estCompDate ?? null,
         uploadedAt: new Date().toISOString(),
-        hasAllData: allDataParsed || existing?.hasAllData || false,
-        hasTrans: transRowsCount > 0 || existing?.hasTrans || false,
+        uploaded,
       });
 
       onOpenChange(false);
-      router.push(`/${projectId}`);
+      router.push(`/${encodeURIComponent(projectId)}`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -170,11 +177,14 @@ export function UploadDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Add project data</DialogTitle>
+          <DialogTitle>Upload project data</DialogTitle>
           <DialogDescription>
-            Drop the PM Web All-Data Export and the K-Fasts Proj Trans Detail. Either or both. Files are detected by their column structure, not by name.
+            Drop the <strong>PM Web All-Data Export</strong> and the{" "}
+            <strong>K-Fasts Proj Trans Detail</strong> as <code>.xlsx</code> files. Either or both.
+            Detection is by header structure, not filename. Every other tab auto-populates from these
+            two files — Notes, Change Log, Invoice Log, Sub Management, Staff and ETC are entered manually in-app.
           </DialogDescription>
         </DialogHeader>
 
@@ -187,7 +197,7 @@ export function UploadDialog({
             onDragLeave={() => setDragOver(false)}
             onDrop={onDrop}
             className={cn(
-              "border border-dashed border-line rounded-md py-10 px-6 text-center transition-colors",
+              "border border-dashed border-line rounded-md py-8 px-6 text-center transition-colors",
               dragOver && "border-accent bg-accent-tint",
             )}
           >
@@ -209,32 +219,44 @@ export function UploadDialog({
           </div>
 
           {items.length > 0 && (
-            <div className="mt-4 space-y-2">
-              {items.map((it) => (
-                <div
-                  key={`${it.kind}-${it.file.name}`}
-                  className="flex items-center gap-3 px-3 py-2 border border-line rounded bg-white"
-                >
-                  <FileSpreadsheet size={16} className="text-muted" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm text-ink truncate">{it.file.name}</div>
-                    <div className="text-xs text-muted">
-                      Detected: {it.kind === "unknown" ? "Unknown format" : it.label}
+            <div className="mt-4 space-y-1.5">
+              {items.map((it) => {
+                const key = it.detection.kind === "unknown" ? `unknown:${it.file.name}` : it.detection.kind;
+                return (
+                  <div
+                    key={key}
+                    className="flex items-center gap-3 px-3 py-1.5 border border-line rounded bg-white"
+                  >
+                    <FileSpreadsheet size={14} className="text-muted shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] text-ink truncate">{it.file.name}</div>
+                      <div className="text-[11px] text-muted">
+                        {it.detection.kind === "unknown"
+                          ? it.detection.label
+                          : KIND_LABEL[it.detection.kind]}
+                      </div>
                     </div>
+                    {it.detection.kind === "unknown" ? (
+                      <AlertCircle size={14} className="text-bad" />
+                    ) : (
+                      <CheckCircle2 size={14} className="text-ok" />
+                    )}
+                    <button
+                      onClick={() => removeItem(key)}
+                      className="text-muted hover:text-ink p-0.5"
+                      aria-label="Remove"
+                    >
+                      <X size={12} />
+                    </button>
                   </div>
-                  {it.kind === "unknown" ? (
-                    <AlertCircle size={16} className="text-bad" />
-                  ) : (
-                    <CheckCircle2 size={16} className="text-ok" />
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
           {error && (
-            <div className="mt-3 text-xs text-bad flex items-center gap-1.5">
-              <AlertCircle size={12} /> {error}
+            <div className="mt-3 text-xs text-bad flex items-start gap-1.5">
+              <AlertCircle size={12} className="mt-0.5 shrink-0" /> {error}
             </div>
           )}
         </div>
@@ -245,7 +267,7 @@ export function UploadDialog({
           </Button>
           <Button onClick={onSave} disabled={!canSave || busy}>
             {busy ? <Loader2 size={14} className="animate-spin" /> : null}
-            {busy ? "Saving…" : "Save"}
+            {busy ? "Saving…" : `Save ${known.length} file${known.length === 1 ? "" : "s"}`}
           </Button>
         </DialogFooter>
       </DialogContent>

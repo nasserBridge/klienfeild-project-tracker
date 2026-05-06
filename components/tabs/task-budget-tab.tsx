@@ -2,7 +2,7 @@
 import * as React from "react";
 import { Card } from "@/components/ui/card";
 import { StatusDot } from "@/components/status-badge";
-import type { AllDataRow, TransRow } from "@/lib/types";
+import type { AllDataRow, TaskBudgetRow, TransRow } from "@/lib/types";
 import { getProjectTotal, getTaskRows, groupTransByEmployee, transForTask } from "@/lib/calculations";
 import { cn, fmtMoney, fmtNum, fmtPct } from "@/lib/utils";
 import { ChevronRight, Search, X } from "lucide-react";
@@ -28,9 +28,13 @@ function statusFromPct(pct: number): HealthStatus {
 export function TaskBudgetTab({
   allData,
   trans,
+  taskBudgetRows: _taskBudgetRows,
 }: {
   allData: AllDataRow[];
   trans: TransRow[];
+  /** Optional sub-task budget CSV rows. Currently the tab is built off PM Web all-data,
+   * so this is accepted but unused — kept here for future use without breaking callers. */
+  taskBudgetRows?: TaskBudgetRow[];
 }) {
   const total = getProjectTotal(allData);
   const tasks = React.useMemo(() => getTaskRows(allData), [allData]);

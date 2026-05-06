@@ -10,8 +10,8 @@ import {
   Tooltip,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { TransRow } from "@/lib/types";
-import { revenueByPeriod } from "@/lib/calculations";
+import type { TablesData, TransRow } from "@/lib/types";
+import { periodLabelFromTables, revenueByPeriod } from "@/lib/calculations";
 import { fmtMoney } from "@/lib/utils";
 
 function fyLabel(period: string): string {
@@ -23,14 +23,22 @@ function fyLabel(period: string): string {
   return `FY${yy} P${pp}`;
 }
 
-export function RevenueByPeriodTab({ trans }: { trans: TransRow[] }) {
+export function RevenueByPeriodTab({
+  trans,
+  tables,
+}: {
+  trans: TransRow[];
+  tables: TablesData | null;
+}) {
   const data = React.useMemo(() => revenueByPeriod(trans), [trans]);
 
   if (data.rows.length === 0) {
     return <div className="text-sm text-muted">No revenue data — upload Proj Trans Detail first.</div>;
   }
 
-  const chartData = data.rows.map((r) => ({ ...r, label: fyLabel(r.period) }));
+  const labelFor = (period: string) =>
+    tables ? periodLabelFromTables(period, tables.periods) : fyLabel(period);
+  const chartData = data.rows.map((r) => ({ ...r, label: labelFor(r.period) }));
 
   return (
     <div className="space-y-6">
@@ -91,7 +99,7 @@ export function RevenueByPeriodTab({ trans }: { trans: TransRow[] }) {
             {data.rows.map((r) => (
               <tr key={r.period} className="border-b border-line/60 hover:bg-rowHover">
                 <td className="px-3 py-1.5 tabular text-[12px]">
-                  {fyLabel(r.period)}{" "}
+                  {labelFor(r.period)}{" "}
                   <span className="text-muted">({r.period})</span>
                 </td>
                 <td className="px-3 py-1.5 text-right tabular">{fmtMoney(r.revenue, { cents: true })}</td>
