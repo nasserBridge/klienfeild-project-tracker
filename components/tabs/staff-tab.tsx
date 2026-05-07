@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
 import type { StaffData, StaffRow, TransRow } from "@/lib/types";
-import { fmtMoney, fmtNum } from "@/lib/utils";
+import { fmtMoney, fmtNum, round2 } from "@/lib/utils";
 import { Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 
 function emptyData(): StaffData {
@@ -28,7 +28,14 @@ export function StaffTab({
 
   const persist = React.useCallback(
     async (next: StaffData) => {
-      await db().staff.put({ projectId, data: next });
+      // Always round rate columns to 2 decimals on save — never let raw float
+      // precision (283.1505263157893) leak through to the UI.
+      const rows = next.rows.map((r) => ({
+        ...r,
+        fy25Rate: round2(r.fy25Rate),
+        fy26Rate: round2(r.fy26Rate),
+      }));
+      await db().staff.put({ projectId, data: { ...next, rows } });
     },
     [projectId],
   );
@@ -67,7 +74,7 @@ export function StaffTab({
     const additions: StaffRow[] = [];
     for (const [name, info] of byEmp.entries()) {
       if (existing.has(name)) continue;
-      const avgRate = info.totalHrs > 0 ? info.totalBill / info.totalHrs : 0;
+      const avgRate = round2(info.totalHrs > 0 ? info.totalBill / info.totalHrs : 0);
       additions.push({
         firm: "01-KLF",
         type: "Labor",
@@ -178,8 +185,8 @@ export function StaffTab({
                     <Cell>
                       <Input value={r.title} onChange={(e) => update(i, { title: e.target.value })} className="h-7 text-[12px]" />
                     </Cell>
-                    <CellNum value={r.fy25Rate} onChange={(v) => update(i, { fy25Rate: v })} />
-                    <CellNum value={r.fy26Rate} onChange={(v) => update(i, { fy26Rate: v })} />
+                    <CellNum value={round2(r.fy25Rate)} onChange={(v) => update(i, { fy25Rate: round2(v) })} />
+                    <CellNum value={round2(r.fy26Rate)} onChange={(v) => update(i, { fy26Rate: round2(v) })} />
                     <td className="px-2 py-1">
                       <button onClick={() => remove(i)} className="text-muted hover:text-bad p-1 rounded">
                         <Trash2 size={12} />

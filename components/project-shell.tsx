@@ -38,6 +38,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   deriveCheckDetail,
+  deriveEtc,
+  deriveInvoiceLog,
   deriveInvoiceSummary,
   deriveTables,
   deriveTaskBudget,
@@ -115,19 +117,71 @@ export function ProjectShell({ projectId }: { projectId: string }) {
   const etcRows = etcR?.rows ?? [];
   const notes = notesR?.data ?? null;
 
-  // Prefer uploaded data when present; fall back to derivation from PM Web all-data
-  // so the tabs still light up if only the standalone exports were dropped.
-  const derivedTaskSummary = React.useMemo(() => deriveTaskSummary(allData), [allData]);
-  const derivedTaskBudget = React.useMemo(() => deriveTaskBudget(allData), [allData]);
-  const derivedInvoiceSummary = React.useMemo(() => deriveInvoiceSummary(allData), [allData]);
-  const derivedCheckDetail = React.useMemo(() => deriveCheckDetail(trans), [trans]);
-  const derivedTables = React.useMemo(() => deriveTables(allData, trans), [allData, trans]);
+  // Prefer uploaded data when present; fall back to derivation from PM Web + K-Fasts
+  // so every tab lights up even if the user dropped only the source exports.
+  // Each derivation is wrapped in try/catch — a single bad row in IndexedDB
+  // shouldn't bring down the whole project page.
+  const safeDerive = <T,>(fn: () => T, fallback: T, label: string): T => {
+    try {
+      return fn();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[derive ${label}] failed`, err);
+      return fallback;
+    }
+  };
+  const derivedTaskSummary = React.useMemo(
+    () => safeDerive(() => deriveTaskSummary(allData), [], "taskSummary"),
+    [allData],
+  );
+  const derivedTaskBudget = React.useMemo(
+    () => safeDerive(() => deriveTaskBudget(allData), [], "taskBudget"),
+    [allData],
+  );
+  const derivedInvoiceSummary = React.useMemo(
+    () => safeDerive(() => deriveInvoiceSummary(allData), [], "invoiceSummary"),
+    [allData],
+  );
+  const derivedCheckDetail = React.useMemo(
+    () => safeDerive(() => deriveCheckDetail(trans), [], "checkDetail"),
+    [trans],
+  );
+  const derivedTables = React.useMemo(
+    () =>
+      safeDerive(
+        () => deriveTables(allData, trans),
+        { periods: [], tasks: [], sumTasks: [] } as TablesData,
+        "tables",
+      ),
+    [allData, trans],
+  );
+  const derivedEtc = React.useMemo(
+    () => safeDerive(() => deriveEtc(trans, allData, staff), [], "etc"),
+    [trans, allData, staff],
+  );
+  const derivedInvoiceLog = React.useMemo(
+    () =>
+      safeDerive(
+        () => deriveInvoiceLog(trans, allData),
+        { rows: [], periods: [] } as InvoiceLogData,
+        "invoiceLog",
+      ),
+    [trans, allData],
+  );
 
-  const taskSummary = (taskSummaryR?.rows?.length ? taskSummaryR.rows : derivedTaskSummary);
-  const taskBudget = (taskBudgetR?.rows?.length ? taskBudgetR.rows : derivedTaskBudget);
-  const invoiceSummary = (invoiceSummaryR?.rows?.length ? invoiceSummaryR.rows : derivedInvoiceSummary);
-  const checkDetail = (checkDetailR?.rows?.length ? checkDetailR.rows : derivedCheckDetail);
+  const taskSummary = taskSummaryR?.rows?.length ? taskSummaryR.rows : derivedTaskSummary;
+  const taskBudget = taskBudgetR?.rows?.length ? taskBudgetR.rows : derivedTaskBudget;
+  const invoiceSummary = invoiceSummaryR?.rows?.length ? invoiceSummaryR.rows : derivedInvoiceSummary;
+  const checkDetail = checkDetailR?.rows?.length ? checkDetailR.rows : derivedCheckDetail;
   const tables = tablesR?.data ?? derivedTables;
+  // ETC and Invoice Log fall back to derivation when nothing has been saved
+  // for this project yet. Once the user edits in-app or uploads explicit data,
+  // those edits are persisted and used directly.
+  const effectiveEtc = etcRows.length > 0 ? etcRows : derivedEtc;
+  const effectiveInvoiceLog =
+    invoiceLog && (invoiceLog.rows.length > 0 || invoiceLog.periods.length > 0)
+      ? invoiceLog
+      : derivedInvoiceLog;
 
   if (stillLoading) {
     return <div className="p-8 text-sm text-muted">Loading project…</div>;
@@ -155,8 +209,8 @@ export function ProjectShell({ projectId }: { projectId: string }) {
     invoiceSummary,
     taskSummary,
     taskBudget,
-    etc: etcRows,
-    invoiceLog,
+    etc: effectiveEtc,
+    invoiceLog: effectiveInvoiceLog,
     changeLog: changeLogRows,
     subManagement,
     staff,
@@ -262,13 +316,13 @@ export function ProjectShell({ projectId }: { projectId: string }) {
             <TaskBudgetTab allData={allData} trans={trans} taskBudgetRows={taskBudget} />
           </TabsContent>
           <TabsContent value="etc">
-            <ETCTab projectId={projectId} rows={etcRows} trans={trans} allData={allData} />
+            <ETCTab projectId={projectId} rows={effectiveEtc} trans={trans} allData={allData} staff={staff} />
           </TabsContent>
           <TabsContent value="invoice-summary">
             <InvoiceSummaryTab rows={invoiceSummary} />
           </TabsContent>
           <TabsContent value="invoice-log">
-            <InvoiceLogTab projectId={projectId} data={invoiceLog} />
+            <InvoiceLogTab projectId={projectId} data={effectiveInvoiceLog} />
           </TabsContent>
           <TabsContent value="hours-staff">
             <HoursByStaffTab allData={allData} trans={trans} />
@@ -309,8 +363,15 @@ function useDexieGet<T>(table: string, projectId: string): T | null | undefined 
   return useLiveQuery(
     async (): Promise<T | null> => {
       if (typeof window === "undefined") return null;
-      const t = (db() as unknown as Record<string, { get: (k: string) => Promise<T | undefined> }>)[table];
-      return ((await t.get(projectId)) ?? null) as T | null;
+      try {
+        const t = (db() as unknown as Record<string, { get?: (k: string) => Promise<T | undefined> }>)[table];
+        if (!t || typeof t.get !== "function") return null;
+        return ((await t.get(projectId)) ?? null) as T | null;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[useDexieGet ${table}] failed`, err);
+        return null;
+      }
     },
     [table, projectId],
   );

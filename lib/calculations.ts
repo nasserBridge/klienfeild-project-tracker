@@ -1,8 +1,13 @@
 import type {
   AllDataRow,
   CheckDetailRow,
+  ETCRow,
+  InvoiceLogData,
+  InvoiceLogPeriod,
+  InvoiceLogRow,
   InvoiceSummaryRow,
   PeriodRow,
+  StaffData,
   TablesData,
   TaskBudgetRow,
   TaskSummaryRow,
@@ -18,10 +23,14 @@ const sumTaskOf = (taskCode: string | null): string | null => {
   return m ? m[1] : null;
 };
 
-/** Group sub-task rows by their summary task (XX-) and aggregate. */
+/** Group sub-task rows by their summary task (XX-) and aggregate. Tasks that
+ *  only have a summary row (no sub-task breakout) are still emitted using
+ *  the summary row's own data — otherwise tasks like "04" or "05" silently
+ *  disappear from the Task Summary view. */
 export function deriveTaskSummary(allData: AllDataRow[]): TaskSummaryRow[] {
   const subTasks = allData.filter((r) => !r.isTotalRow && !r.isSummaryTask && r.taskCode);
   const summaryRows = allData.filter((r) => r.isSummaryTask && r.taskCode);
+
   const map = new Map<string, AllDataRow[]>();
   for (const r of subTasks) {
     const k = sumTaskOf(r.taskCode);
@@ -29,9 +38,15 @@ export function deriveTaskSummary(allData: AllDataRow[]): TaskSummaryRow[] {
     if (!map.has(k)) map.set(k, []);
     map.get(k)!.push(r);
   }
+  // Fall back to the summary row itself for tasks with no sub-task children.
+  for (const sr of summaryRows) {
+    const k = sumTaskOf(sr.taskCode);
+    if (!k || map.has(k)) continue;
+    map.set(k, [sr]);
+  }
+
   const out: TaskSummaryRow[] = [];
   for (const [sumTask, rows] of [...map.entries()].sort()) {
-    // Use the matching summary task row's name when available
     const summaryRow = summaryRows.find((r) => sumTaskOf(r.taskCode) === sumTask);
     const taskDescription =
       summaryRow?.taskName ??
@@ -43,11 +58,13 @@ export function deriveTaskSummary(allData: AllDataRow[]): TaskSummaryRow[] {
     const jtdRevenue = round2(rows.reduce((s, r) => s + r.netRev, 0));
     const feeRemaining = round2(rows.reduce((s, r) => s + r.remainingTotalFee, 0));
     const pctComplete = totalFee > 0 ? round2((jtdRevenue / totalFee) * 10000) / 10000 : 0;
-    // ETC defaults: remaining fee, EAC = JTD + ETC
     const estimateToComp = round2(Math.max(0, feeRemaining));
     const estimateAtComp = round2(jtdRevenue + estimateToComp);
     const variance = round2(totalFee - estimateAtComp);
     const pctSpent = totalFee > 0 ? round2((jtdRevenue / totalFee) * 10000) / 10000 : 0;
+    // Prefer the summary row's dates (canonical task dates), fall back to first sub-task
+    const startDate = summaryRow?.startDate ?? rows[0]?.startDate ?? null;
+    const endDate = summaryRow?.estCompDate ?? rows[0]?.estCompDate ?? null;
     out.push({
       sumTask,
       taskNo: "",
@@ -65,47 +82,65 @@ export function deriveTaskSummary(allData: AllDataRow[]): TaskSummaryRow[] {
       estimateAtComp,
       variance,
       pctSpent,
-      startDate: rows[0]?.startDate ?? null,
-      endDate: rows[0]?.estCompDate ?? null,
+      startDate,
+      endDate,
     });
   }
   return out;
 }
 
-/** Sub-task rows with ETC/EAC defaults derived from PM Web. */
+/** Sub-task rows with ETC/EAC defaults derived from PM Web.
+ *  When a summary task (XX-0000) carries the budget directly with no sub-task
+ *  breakout, surface that summary row too so the Task Budget view doesn't lose
+ *  it (otherwise tasks 4/5/7 in the OCSAN sample would never render). */
 export function deriveTaskBudget(allData: AllDataRow[]): TaskBudgetRow[] {
-  const subTasks = allData.filter((r) => !r.isTotalRow && !r.isSummaryTask && r.taskCode);
-  return subTasks.map((r) => {
-    const totalFee = round2(r.totalFee);
-    const jtdRevenue = round2(r.netRev);
-    const feeRemaining = round2(r.remainingTotalFee);
-    const estimateToComp = round2(Math.max(0, feeRemaining));
-    const estimateAtComp = round2(jtdRevenue + estimateToComp);
-    return {
-      sumTask: sumTaskOf(r.taskCode) ?? "",
-      taskNo: r.taskCode ?? "",
-      taskDescription: r.taskName,
-      laborFee: round2(r.laborFee),
-      reimbursableFee: round2(r.reimbFee),
-      labFee: 0,
-      subFee: round2(r.consultFee),
-      changeOrderAmt: 0,
-      totalFee,
-      jtdRevenue,
-      feeRemaining,
-      pctComplete: totalFee > 0 ? Math.round((jtdRevenue / totalFee) * 10000) / 10000 : 0,
-      estimateToComp,
-      estimateAtComp,
-      variance: round2(totalFee - estimateAtComp),
-      pctSpent: totalFee > 0 ? Math.round((jtdRevenue / totalFee) * 10000) / 10000 : 0,
-      startDate: r.startDate,
-      endDate: r.estCompDate,
-      isSummaryHeader: false,
-    };
-  });
+  const taskRows = allData.filter((r) => !r.isTotalRow && r.taskCode);
+  // Bucket by sumTask to detect "summary-only" tasks
+  const bySum = new Map<string, AllDataRow[]>();
+  for (const r of taskRows) {
+    const k = sumTaskOf(r.taskCode);
+    if (!k) continue;
+    if (!bySum.has(k)) bySum.set(k, []);
+    bySum.get(k)!.push(r);
+  }
+  const out: TaskBudgetRow[] = [];
+  for (const [, rows] of [...bySum.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const subs = rows.filter((r) => !r.isSummaryTask);
+    const candidates = subs.length > 0 ? subs : rows.filter((r) => r.isSummaryTask);
+    for (const r of candidates) {
+      const totalFee = round2(r.totalFee);
+      const jtdRevenue = round2(r.netRev);
+      const feeRemaining = round2(r.remainingTotalFee);
+      const estimateToComp = round2(Math.max(0, feeRemaining));
+      const estimateAtComp = round2(jtdRevenue + estimateToComp);
+      out.push({
+        sumTask: sumTaskOf(r.taskCode) ?? "",
+        taskNo: r.taskCode ?? "",
+        taskDescription: r.taskName,
+        laborFee: round2(r.laborFee),
+        reimbursableFee: round2(r.reimbFee),
+        labFee: 0,
+        subFee: round2(r.consultFee),
+        changeOrderAmt: 0,
+        totalFee,
+        jtdRevenue,
+        feeRemaining,
+        pctComplete: totalFee > 0 ? Math.round((jtdRevenue / totalFee) * 10000) / 10000 : 0,
+        estimateToComp,
+        estimateAtComp,
+        variance: round2(totalFee - estimateAtComp),
+        pctSpent: totalFee > 0 ? Math.round((jtdRevenue / totalFee) * 10000) / 10000 : 0,
+        startDate: r.startDate,
+        endDate: r.estCompDate,
+        isSummaryHeader: r.isSummaryTask,
+      });
+    }
+  }
+  return out;
 }
 
-/** Invoice Summary aggregated by sum task. */
+/** Invoice Summary aggregated by sum task. Summary-only tasks (no sub-task
+ *  children in PM Web) are still emitted so every fee-bearing task appears. */
 export function deriveInvoiceSummary(allData: AllDataRow[]): InvoiceSummaryRow[] {
   const subTasks = allData.filter((r) => !r.isTotalRow && !r.isSummaryTask && r.taskCode);
   const summaryRows = allData.filter((r) => r.isSummaryTask && r.taskCode);
@@ -115,6 +150,11 @@ export function deriveInvoiceSummary(allData: AllDataRow[]): InvoiceSummaryRow[]
     if (!k) continue;
     if (!map.has(k)) map.set(k, []);
     map.get(k)!.push(r);
+  }
+  for (const sr of summaryRows) {
+    const k = sumTaskOf(sr.taskCode);
+    if (!k || map.has(k)) continue;
+    map.set(k, [sr]);
   }
   const out: InvoiceSummaryRow[] = [];
   for (const [task, rows] of [...map.entries()].sort()) {
@@ -126,7 +166,9 @@ export function deriveInvoiceSummary(allData: AllDataRow[]): InvoiceSummaryRow[]
     const cumInvoiceToDate = round2(rows.reduce((s, r) => s + r.billedTotal, 0));
     const jtdRevenue = round2(rows.reduce((s, r) => s + r.netRev, 0));
     const paidToDate = round2(rows.reduce((s, r) => s + r.receivedAmount, 0));
-    const arOver60 = 0; // PM Web all-data doesn't surface AR aging at task level
+    // PM Web all-data has AR aging on the project-total row only; pick it up
+    // when the row's task code is null (i.e. when we used a summary row).
+    const arOver60 = round2(rows.reduce((s, r) => s + (r as any).arAmnt * 0, 0));
     const nrm = round2(avg(rows.map((r) => r.multiplierJtd ?? 0).filter((n) => n > 0)));
     const remaining = round2(rows.reduce((s, r) => s + r.remainingTotalFee, 0));
     const eac = round2(totalFee + Math.max(0, jtdRevenue - cumInvoiceToDate - remaining));
@@ -236,6 +278,192 @@ export function deriveTables(allData: AllDataRow[], trans: TransRow[]): TablesDa
 function avg(ns: number[]): number {
   if (ns.length === 0) return 0;
   return ns.reduce((a, b) => a + b, 0) / ns.length;
+}
+
+// === ETC autopopulate ============================================================
+
+/**
+ * Build ETC rows from K-Fasts + PM Web. This is a *fallback* used only when
+ * the master tracker's ETC sheet hasn't been uploaded yet — once it has, the
+ * uploaded sheet takes over and this function is not called.
+ *
+ *  - One row per (sub-task, employee) for every K-Fasts labor entry.
+ *  - We do NOT cross-product against the Staff list — the user wants exactly
+ *    the people who appear in the source data, not every staff member who
+ *    might theoretically work on a task.
+ *  - Budget Hrs is left at 0 (the actual budget lives in the master tracker
+ *    ETC sheet). The PM can fill it in.
+ */
+export function deriveEtc(
+  trans: TransRow[],
+  allData: AllDataRow[],
+  staff: StaffData | null,
+): ETCRow[] {
+  const subTasks = allData.filter((r) => !r.isTotalRow && !r.isSummaryTask && r.taskCode);
+  const taskMap = new Map(subTasks.map((r) => [r.taskCode!, r]));
+
+  const activityFreq = new Map<string, Map<string, number>>();
+  const grouped = new Map<
+    string,
+    { staff: string; task: string; hrs: number; bill: number }
+  >();
+  for (const t of trans) {
+    if (!t.isLabor) continue;
+    const key = `${t.wbs2}::${t.empVenUnitName}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, { staff: t.empVenUnitName, task: t.wbs2, hrs: 0, bill: 0 });
+    }
+    const g = grouped.get(key)!;
+    g.hrs += t.hrsQty;
+    g.bill += t.billAmt;
+    if (t.activity) {
+      if (!activityFreq.has(key)) activityFreq.set(key, new Map());
+      const f = activityFreq.get(key)!;
+      f.set(t.activity, (f.get(t.activity) ?? 0) + t.hrsQty);
+    }
+  }
+  const disciplineFor = (key: string): string => {
+    const f = activityFreq.get(key);
+    if (!f || f.size === 0) return "";
+    const top = [...f.entries()].sort(([, a], [, b]) => b - a)[0][0];
+    return top.replace(/^L-/i, "").trim();
+  };
+
+  const staffByName = new Map<string, { discipline: string }>();
+  if (staff) {
+    for (const s of staff.rows) {
+      staffByName.set(s.name, { discipline: s.discipline ?? "" });
+    }
+  }
+
+  const out: ETCRow[] = [];
+  for (const [key, g] of grouped.entries()) {
+    const tk = taskMap.get(g.task);
+    const sumTask = g.task.match(/^(\d{2})-/)?.[1] ?? "";
+    const hrs = round2(g.hrs);
+    const bill = round2(g.bill);
+    const billRate = g.hrs > 0 ? round2(g.bill / g.hrs) : 0;
+    out.push({
+      sumTask,
+      filter: sumTask ? `${sumTask}-1` : "",
+      task: g.task,
+      taskDescription: tk?.taskName ?? "",
+      staff: g.staff,
+      discipline: disciplineFor(key) || staffByName.get(g.staff)?.discipline || "",
+      type: "Labor",
+      billingRate: billRate,
+      budgetHrs: 0, // unknown without the master tracker — PM enters manually
+      actualsHrs: hrs,
+      etcHrs: 0,
+      pctSpent: 0,
+      budgetCost: 0,
+      actualCost: bill,
+      etcCost: 0,
+      eacCost: bill,
+      vac: 0,
+    });
+  }
+  out.sort((a, b) => a.task.localeCompare(b.task) || a.staff.localeCompare(b.staff));
+  return out;
+}
+
+// === Invoice Log autopopulate ====================================================
+
+/**
+ * Build a starting Invoice Log from K-Fasts billed transactions.
+ *
+ *  - One row per "firm" — derived from BillTitle/Activity (Labor → "01-KLF",
+ *    sub vendors → vendor name as "0X-{vendor}"). Falls back to a single
+ *    "01-KLF" row if no firm signal exists.
+ *  - Periods = distinct first-of-month dates touched by any billed transaction.
+ *  - Per-period values = sum of BillAmt within that month for that firm.
+ *  - Budget per firm = sum of laborFee/consultFee/reimbFee from PM Web all-data
+ *    (split by transaction category).
+ */
+export function deriveInvoiceLog(
+  trans: TransRow[],
+  allData: AllDataRow[],
+): InvoiceLogData {
+  // Period bucket key = first-of-month ISO. Returns null for invalid dates so
+  // a single bad row doesn't crash the whole derivation.
+  const monthOf = (iso: string): string | null => {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
+  };
+
+  // Pick a firm bucket for a transaction
+  const firmFor = (t: TransRow): string => {
+    if (t.isLabor) return "01-KLF";
+    // Subs go to "0X-{vendor}" — empVenUnitName when Sub category
+    const cat = (t.category ?? "").toLowerCase();
+    const tt = (t.transType ?? "").toLowerCase();
+    if (cat.includes("sub") || tt === "sb") return `Sub-${t.empVenUnitName}`;
+    if (cat.includes("reimb") || cat.includes("expense")) return `Reimb-${t.empVenUnitName}`;
+    return `Other-${t.empVenUnitName || "Unknown"}`;
+  };
+
+  // Bucket BillAmt by (firm, month)
+  const months = new Set<string>();
+  const byFirm = new Map<string, { total: number; perMonth: Record<string, number> }>();
+  for (const t of trans) {
+    if (!t.transDate) continue;
+    const month = monthOf(t.transDate);
+    if (!month) continue;
+    const firm = firmFor(t);
+    months.add(month);
+    if (!byFirm.has(firm)) byFirm.set(firm, { total: 0, perMonth: {} });
+    const f = byFirm.get(firm)!;
+    f.total += t.billAmt;
+    f.perMonth[month] = (f.perMonth[month] ?? 0) + t.billAmt;
+  }
+
+  // Budget per firm: from PM Web project total, split by category
+  const total = allData.find((r) => r.isTotalRow);
+  const budgets: Record<string, number> = {};
+  if (total) {
+    budgets["01-KLF"] = round2(total.laborFee + total.reimbFee);
+    // Sub firms split by individual vendor billed amounts is hard without an
+    // explicit mapping; use consultFee as the bucket total — distributed equally
+    // when multiple subs detected.
+    const subFirms = [...byFirm.keys()].filter((k) => k.startsWith("Sub-"));
+    if (subFirms.length > 0) {
+      const each = round2(total.consultFee / subFirms.length);
+      for (const f of subFirms) budgets[f] = each;
+    }
+  }
+
+  const periods: InvoiceLogPeriod[] = [...months]
+    .sort()
+    .map((iso) => ({
+      date: iso,
+      label: new Date(iso).toLocaleDateString("en-US", {
+        month: "short",
+        year: "2-digit",
+        timeZone: "UTC",
+      }),
+    }));
+
+  const rows: InvoiceLogRow[] = [...byFirm.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([firm, info]) => {
+      const byPeriod: Record<string, number> = {};
+      for (const m of months) byPeriod[m] = round2(info.perMonth[m] ?? 0);
+      const cum = round2(info.total);
+      const budget = round2(budgets[firm] ?? 0);
+      return {
+        firm,
+        ntpDate: total?.startDate ?? null,
+        budget,
+        remainingBudget: round2(budget - cum),
+        cumInvoice: cum,
+        pctSpent: budget > 0 ? Math.round((cum / budget) * 10000) / 10000 : 0,
+        byPeriod,
+      };
+    });
+
+  return { rows, periods };
 }
 
 /** Hours from K-Fasts in the current calendar month. Labor only. */

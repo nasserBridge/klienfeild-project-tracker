@@ -352,6 +352,11 @@ export function parseEtcCsv(matrix: Matrix, headerRowIndex: number): ETCRow[] {
     const staff = str(raw, col(["Staff"]));
     if (!sumTask && !task && !staff) continue;
     if (/^Total$/i.test(staff) || /^Grand Total$/i.test(staff)) continue;
+    // Skip the bookkeeping placeholder rows from the source ETC sheet
+    // ("Budget" and "Expenses" are template artifacts, not real people).
+    if (/^(Budget|Expenses?)$/i.test(staff)) continue;
+    // Round all numerics to 2 decimals — Excel float-precision artifacts
+    // (e.g. 135.76000000000002, 107.07047619047614) shouldn't bleed through.
     rows.push({
       sumTask,
       filter: str(raw, col(["Filter"])),
@@ -360,16 +365,16 @@ export function parseEtcCsv(matrix: Matrix, headerRowIndex: number): ETCRow[] {
       staff,
       discipline: str(raw, col(["Discpline", "Discipline"])),
       type: str(raw, col(["Type"])),
-      billingRate: num(raw, col(["Billing Rate"])),
-      budgetHrs: num(raw, col(["Budget HRS"])),
-      actualsHrs: num(raw, col(["Actuals HRS", "Actual HRS"])),
-      etcHrs: num(raw, col(["Est To Comp HRS", "ETC HRS"])),
-      pctSpent: num(raw, col(["% Spent"])),
-      budgetCost: num(raw, col(["Budget COST", "Budget Cost"])),
-      actualCost: num(raw, col(["Actual COST", "Actual Cost"])),
-      etcCost: num(raw, col(["ETC COST", "ETC Cost", "Est To Comp COST"])),
-      eacCost: num(raw, col(["EAC COST", "EAC Cost", "Estimate At Complete COST"])),
-      vac: num(raw, col(["VAC", "Variance At Completion"])),
+      billingRate: r2(num(raw, col(["Billing Rate"]))),
+      budgetHrs: r2(num(raw, col(["Budget HRS", "Budget Hrs"]))),
+      actualsHrs: r2(num(raw, col(["Actuals HRS", "Actual HRS", "Actuals Hrs"]))),
+      etcHrs: r2(num(raw, col(["Est To Comp HRS", "ETC HRS", "Est To Comp Hrs"]))),
+      pctSpent: r2(num(raw, col(["% Spent"]))),
+      budgetCost: r2(num(raw, col(["Budget COST", "Budget Cost"]))),
+      actualCost: r2(num(raw, col(["Actual COST", "Actual Cost"]))),
+      etcCost: r2(num(raw, col(["ETC COST", "ETC Cost", "Est To Comp COST"]))),
+      eacCost: r2(num(raw, col(["EAC COST", "EAC Cost", "Estimate At Complete COST", "Est At Comp COST"]))),
+      vac: r2(num(raw, col(["VAC", "Variance At Completion"]))),
     });
   }
   return rows;
@@ -582,11 +587,11 @@ export function parseStaffCsv(matrix: Matrix): StaffData {
       discipline: str(raw, col(["Discpline", "Discipline"])),
       name,
       title: str(raw, col(["Title"])),
-      fy25Rate: num(raw, col(["FY25 Rate", "FY25"])),
-      fy26Rate: num(raw, col(["FY26 Rate", "FY26"])),
+      fy25Rate: r2(num(raw, col(["FY25 Rate", "FY25"]))),
+      fy26Rate: r2(num(raw, col(["FY26 Rate", "FY26"]))),
     });
   }
-  return { rows, projectMultiplier };
+  return { rows, projectMultiplier: projectMultiplier !== null ? r2(projectMultiplier) : null };
 }
 
 // === Notes ========================================================================

@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { db } from "@/lib/db";
-import type { AllDataRow, ETCRow, TransRow } from "@/lib/types";
+import type { AllDataRow, ETCRow, StaffData, TransRow } from "@/lib/types";
 import { cn, fmtMoney, fmtNum, fmtPct, round2 } from "@/lib/utils";
 import { Plus, RefreshCw, Trash2 } from "lucide-react";
 
@@ -13,11 +13,13 @@ export function ETCTab({
   rows,
   trans,
   allData,
+  staff,
 }: {
   projectId: string;
   rows: ETCRow[];
   trans: TransRow[];
   allData: AllDataRow[];
+  staff: StaffData | null;
 }) {
   const [sumTaskFilter, setSumTaskFilter] = React.useState("__all");
 
@@ -60,18 +62,23 @@ export function ETCTab({
     ]);
   };
 
-  /** Auto-populate from K-Fasts × Sub-tasks: one row per (employee, task) with actuals + discipline filled in. */
+  /**
+   * Auto-populate ETC from K-Fasts: one row per (sub-task, employee) for
+   * everyone who has logged labor hours. No cross-product — the rows reflect
+   * exactly the people who appear in the source data. Budget Hrs is left at 0
+   * for the PM to fill in (the actual budget lives in the master tracker ETC
+   * sheet, which should be uploaded if it's available).
+   */
   const autoPopulate = async () => {
     const subTasks = allData.filter((r) => !r.isTotalRow && !r.isSummaryTask && r.taskCode);
     const taskMap = new Map(subTasks.map((r) => [r.taskCode!, r]));
 
-    // Track most-frequent activity per (employee, task) key to derive discipline.
+    // K-Fasts grouping: actual hrs/bill per (task, staff)
     const activityFreq = new Map<string, Map<string, number>>();
-
-    const grouped = new Map<string, {
-      staff: string; task: string; hrs: number; bill: number;
-      sumTask: string; description: string; title: string;
-    }>();
+    const grouped = new Map<
+      string,
+      { staff: string; task: string; hrs: number; bill: number; sumTask: string; description: string }
+    >();
     for (const t of trans) {
       if (!t.isLabor) continue;
       const key = `${t.wbs2}::${t.empVenUnitName}`;
@@ -84,33 +91,30 @@ export function ETCTab({
           bill: 0,
           sumTask: tk?.taskCode?.match(/^(\d{2})-/)?.[1] ?? "",
           description: tk?.taskName ?? t.taskName,
-          title: t.billTitle ?? "",
         });
       }
       const g = grouped.get(key)!;
       g.hrs += t.hrsQty;
       g.bill += t.billAmt;
-
-      // Tally activity for discipline derivation
       if (t.activity) {
         if (!activityFreq.has(key)) activityFreq.set(key, new Map());
-        const freq = activityFreq.get(key)!;
-        freq.set(t.activity, (freq.get(t.activity) ?? 0) + t.hrsQty);
+        const f = activityFreq.get(key)!;
+        f.set(t.activity, (f.get(t.activity) ?? 0) + t.hrsQty);
       }
     }
-
-    // Derive discipline from the highest-hours activity (strip "L-" prefix)
     const disciplineFor = (key: string): string => {
-      const freq = activityFreq.get(key);
-      if (!freq || freq.size === 0) return "";
-      const top = [...freq.entries()].sort(([, a], [, b]) => b - a)[0][0];
+      const f = activityFreq.get(key);
+      if (!f || f.size === 0) return "";
+      const top = [...f.entries()].sort(([, a], [, b]) => b - a)[0][0];
       return top.replace(/^L-/i, "").trim();
     };
 
     const existingKey = new Set(rows.map((r) => `${r.task}::${r.staff}`));
+    const staffByName = new Map((staff?.rows ?? []).map((s) => [s.name, s]));
     const additions: ETCRow[] = [];
     for (const [key, g] of grouped.entries()) {
       if (existingKey.has(key)) continue;
+      const sObj = staffByName.get(g.staff);
       const billRate = g.hrs > 0 ? round2(g.bill / g.hrs) : 0;
       additions.push({
         sumTask: g.sumTask,
@@ -118,10 +122,10 @@ export function ETCTab({
         task: g.task,
         taskDescription: g.description,
         staff: g.staff,
-        discipline: disciplineFor(key),
+        discipline: disciplineFor(key) || sObj?.discipline || "",
         type: "Labor",
         billingRate: billRate,
-        budgetHrs: 0,   // manual — not available in PM Web or K-Fasts
+        budgetHrs: 0, // PM enters manually — actuals are NOT a budget estimate
         actualsHrs: round2(g.hrs),
         etcHrs: 0,
         pctSpent: 0,
