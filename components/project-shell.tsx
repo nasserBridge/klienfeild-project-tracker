@@ -307,7 +307,7 @@ export function ProjectShell({ projectId }: { projectId: string }) {
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto">
           <TabsContent value="summary">
-            <SummaryTab allData={allData} trans={trans} />
+            <SummaryTab allData={allData} trans={trans} etc={effectiveEtc} />
           </TabsContent>
           <TabsContent value="task-summary">
             <TaskSummaryTab rows={taskSummary} />
